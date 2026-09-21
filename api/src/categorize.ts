@@ -23,7 +23,9 @@ export const CATEGORIES = [
   "dessert",
   "shopping",
   "outdoors",
-  "culture",
+  "art",
+  "music",
+  "shows",
   "other",
 ] as const;
 
@@ -31,6 +33,17 @@ export type Category = (typeof CATEGORIES)[number];
 
 export const isCategory = (v: unknown): v is Category =>
   typeof v === "string" && (CATEGORIES as readonly string[]).includes(v);
+
+/**
+ * Normalises anything the user types as a label — a category of their own, a
+ * tag like "date night", a cuisine — so "Date  Night" and "date night" are one
+ * chip, not two. Returns null for anything unusable.
+ */
+export function normalizeLabel(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const label = raw.trim().replace(/\s+/g, " ").toLowerCase();
+  return label.length >= 1 && label.length <= 40 ? label : null;
+}
 
 /**
  * Long, distinctive tokens — safe to match anywhere in the string, because
@@ -47,7 +60,8 @@ const LOOSE: Array<[Category, RegExp]> = [
   ],
   ["shopping", /videogame|bookstore|grocer|boutique|bodega|vintage|thrift/i],
   ["outdoors", /botanical|greenway|playground|waterfront/i],
-  ["culture", /museum|gallery|theater|theatre|cinema|library/i],
+  ["art", /museum|gallery/i],
+  ["shows", /theater|theatre|cinema|playhouse/i],
 ];
 
 /**
@@ -59,7 +73,8 @@ const STRICT: Array<[Category, RegExp]> = [
   ["food", /\b(taco|tacos|deli|diner|grill|bbq|thai|halal|curry|dosa|pho|banh|katsu|oyster|ramen)\b/i],
   ["shopping", /\b(store|shop|shops|market|books?|record|records|games?)\b/i],
   ["outdoors", /\b(park|garden|gardens|beach|trail|pier)\b/i],
-  ["culture", /\b(studio|venue|hall|arena|club)\b/i],
+  ["music", /\b(jazz|blues|concert|venue)\b/i],
+  ["shows", /\bcomedy\b/i],
 ];
 
 /** Loose rules run first — a specific signal beats a generic one. */

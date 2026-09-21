@@ -94,51 +94,95 @@ at any time and access dies immediately.
 
 ---
 
-## Open: the extractor
+## The extractor
 
-**Status: unsolved. This is the remaining hard part.**
+**Status: working** (`api/src/ingest/sharedList.ts`, verified 2026-08-11
+against a real 11-place list). Two plain HTTP GETs, no browser:
 
-Verified 2026-08-06 by probing a public Maps place page: plain fetch returns
-200 OK, ~200KB, no bot wall — but nothing useful is server-rendered.
-`og:title` is `"Google Maps"`, `<title>` is `"Google Maps"`, and the only
-coordinates present are a viewport bounding box. The place name appears **only**
-as an echo of the requested URL.
+1. The share link (`maps.app.goo.gl/XXXX`) 302s to a canonical Maps URL
+   carrying the list id as `!2s<id>`.
+2. `/maps/preview/entitylist/getlist` returns the list as `)]}'`-prefixed JSON
+   with name, owner, and every place with coordinates.
 
-So HTML scraping is a dead end. The real target is the XHR endpoint — the shell
-contains the token `entitylist`, and Maps calls something like
-`/maps/preview/entitylist/getlist`.
+HTML scraping was a dead end: the Maps page server-renders nothing useful. The
+endpoint was found by logging network requests from a headless browser; that
+probe (Puppeteer) was deleted once the plain fetch worked. It's in git at
+`82cca3e` if the endpoint ever moves and needs rediscovering.
 
-**Plan:**
+Gotchas:
 
-1. **Headless Chrome first.** Puppeteer loads the share URL, waits for the list
-   to render, reads places from the DOM. Works without knowing Google's
-   internals. Simultaneously log network requests matching `entitylist` — this
-   *reveals* the endpoint.
-2. **Then drop to a plain fetch** of that endpoint and delete the browser.
-   Faster, cheaper, more stable.
+- **Send a non-browser User-Agent.** A desktop Chrome UA gets the
+  `DurableDeepLinkUi` interstitial, which resolves the link in JavaScript and
+  never redirects.
+- **Field positions are observed, not documented.** Google ships untagged
+  nested arrays; the parser validates coordinates so a moved index yields zero
+  places rather than wrong ones.
+- **Page size is 500.** Bigger lists would need paging.
 
-Blocked on: one real shared list URL to observe.
+---
 
-> Gotcha: Bun mangles Puppeteer's bundled Chrome on macOS (`dlopen` framework
-> error). Fix by extracting the Chrome zip manually — reinstalling won't help.
+## Categorization
+
+Three layers, most personal wins. Automatic answers are only defaults: the
+user can always recategorize, and ambiguous places (a bar Google also calls a
+jazz club) are theirs to call.
+
+1. **Category** — one high-level bucket: food, drink, coffee, dessert,
+   shopping, outdoors, art (museums, galleries), music (jazz clubs, live
+   music), shows (theater, comedy, cinema), other. From
+   Google Maps' primary category when the place has been looked up
+   ("Cocktail bar" → drink), else keyword rules on the name.
+2. **Facts** — restaurants get one cuisine and one price level (1–4). These
+   have a single right answer, so they're fields, not tags. **A cuisine
+   means food**: Tibetan is a restaurant whatever the name says, and every
+   food place should have a cuisine (the app flags those that don't).
+   Only places Google calls food get a cuisine, so a bar that also serves
+   tacos stays a bar. Specific beats regional ("Chinese noodle" over
+   "Asian").
+
+   Both come from a background lookup (`api/src/enrich/`): it searches Maps'
+   internal `tbm=map` endpoint for each place by name, centred on its
+   coordinates, and takes the nearest result with a matching name within
+   150 m. Unofficial like list ingest, so paced at one request per 1.5s, 40
+   per run. Google's raw categories are stored and re-derived at startup,
+   so changing the mapping rules never needs new requests. Price isn't in
+   the search results; the user sets it. On a real 16-place list
+   (2026-09-21): 16/16 matched, 13/13 restaurants got the right cuisine,
+   and Google corrected 8 keyword categories.
+3. **Subcategories** — the user's own, always *inside* a built-in: food →
+   "lunch special", "date spot", "gatekeep this". Users can't create
+   top-level categories. Names are scoped to their parent, a place carries
+   only subcategories of its current category, and moving a place hides
+   (doesn't delete) the old ones. Never assigned automatically; the sheet
+   offers starter ideas per category until the user creates them.
+
+The user can override category, cuisine and price, and reset each back to
+automatic. User values live outside `places` so refreshes never erase them.
+
+Tested 2026-09-21 on 120 random NYC spots (15 place types): 120/120 matched on
+Google, 113/120 landed in the category their type implied; the rest were
+fair readings of Google's primary category (e.g. a "jazz" bar Google lists as
+"Bar" first). Test scripts lived in the session scratchpad, not the repo.
 
 ---
 
 ## Deferred
 
-- **Share-target registration** — Android intent filters, iOS share extension,
-  so the share sheet hands links straight to the app. This is what makes
-  onboarding two taps instead of copy-paste.
 - **Self-healing parser** — when extraction returns 0 places, an agent reads the
   DOM and proposes new selectors for review. The agent should *repair the
   parser*, never *be* the parser: a hallucinated lat/lng puts a restaurant in
   New Jersey and nothing would catch it. Keep runtime extraction deterministic.
 - **Real walking routes** — filter by straight-line radius first, then Routes
   API for the top ~20 only. Current estimate is haversine ÷ 80 m/min.
-- **Category mapping** — list name first, then place types, with manual
-  per-place override. Overrides are required; type data is noisy.
+- **Validation agent** — double-checks automatic categories. Parked until the
+  core app is fleshed out.
 - **Places API enrichment** — hours, ratings, photos. Note: `place_id` may be
   cached indefinitely, other Places fields ~30 days.
+- **Groups / sharing lists with friends** — out of scope until the solo
+  experience is good. An earlier group-based model (invite codes, shared
+  feeds) is in git history at `82cca3e`.
+- **Postgres + migrations** — move off SQLite to a real Postgres database with
+  a migration tool once the schema settles.
 - **Auth** — Google sign-in for *identity only*, when there's a second user and
   cross-device sync matters. Grants nothing about saved places.
 - **Takeout importer** — sanctioned fallback and backlog seeding. CSV is thin
@@ -149,9 +193,23 @@ Blocked on: one real shared list URL to observe.
 ## Data model
 
 ```sql
-lists  (url PK, name, strategy, fetched_at)
-places (id, list_url FK, name, lat, lng, address, note, PRIMARY KEY (id, list_url))
+lists           (url, user_key, name, strategy, fetched_at, content_hash,
+                 PRIMARY KEY (url, user_key))
+places          (id, list_url, user_key, name, lat, lng, address, note,
+                 category, category_source, cuisine, price,
+                 PRIMARY KEY (id, list_url, user_key))
+place_overrides (user_key, place_id, category, hidden, cuisine, price, updated_at,
+                 PRIMARY KEY (user_key, place_id))
+subcategories       (user_key, parent, name, created_at,
+                     PRIMARY KEY (user_key, parent, name))
+place_subcategories (user_key, place_id, parent, name, created_at,
+                     PRIMARY KEY (user_key, place_id, parent, name))
+place_lookups       (place_id PK, status, google_id, google_categories,
+                     category, cuisine, checked_at)   -- shared across users
 ```
+
+`user_key` is the opaque per-device key the app sends. Everything is scoped by
+it; there are no accounts and no sharing between users.
 
 `strategy` records which extraction path produced the data — when Google
 changes the page, it tells you where to start looking.
@@ -164,18 +222,61 @@ keyed per user and deletable from day one. Much easier now than retrofitted.
 
 ---
 
+## iOS distribution
+
+iPhone only; Android was dropped. What it takes to get the app onto a phone:
+
+| Route | Cost | Catch |
+|---|---|---|
+| **Expo Go** (what works today) | free | Runs only while the Mac serves it, same Wi-Fi. No share extension. |
+| **Xcode, free Apple ID** | free | Needs full Xcode (not installed; only CLT). Install expires every 7 days. No app groups → no share extension. |
+| **Home-screen web app** (Safari → Add to Home Screen) | free | Needs the API hosted. iOS web apps can't be share targets. |
+| **Apple Developer Program** | $99/yr | Required for the App Store and TestFlight, and for the share extension's app group. No way around it for distribution. |
+
+The `expo-sharing` share extension is configured (`app.json`, verified via
+prebuild) but only runs in a paid-account dev build. **Free alternative:** an
+iOS Shortcut ("Add to location") in the share sheet that opens
+`location://connect?url=…` — works with every route above, one tap more than
+a real extension. The deep-link handler isn't built yet.
+
+Bundle id `com.kellmanwanzer.location` is a placeholder; change it before
+registering anything with Apple.
+
+---
+
 ## Status
 
 | | |
 |---|---|
 | Bun API, routes, SQLite cache | ✅ working |
+| List ingest (`getlist` plain fetch) | ✅ verified on a real 16-place list, 2026-09-21 |
+| Background list refresh (stale-while-revalidate, 15 min) | ✅ working |
+| Categorization: Google lookup → category + cuisine | ✅ working (see Categorization) |
+| User overrides: category, cuisine, price, hide | ✅ working |
+| User subcategories (inside a built-in) | ✅ working |
 | Distance sort (haversine + walk estimate) | ✅ working |
-| Minimal web UI, browser geolocation | ✅ working |
-| Expo app (iOS / Android / web) | ✅ builds clean |
-| Onboarding / connect flow | ✅ working (paste-a-link) |
-| Location permission + distance sort in app | ✅ working |
-| Share-target registration | ❌ deferred |
-| Extractor | ❌ blocked on a share URL |
+| Live location in app (re-sorts every 50 m) | ✅ in code — not yet tried on a phone |
+| Expo app (iOS / web) | ✅ type-checks, web build clean |
+| Connect a list | ✅ paste-a-link; share extension configured (see iOS distribution) |
+| Minimal web UI (`api/public`) | ✅ working |
+| Hosting the API | ⏸ later — runs on the Mac. Prefer the Mac + a private tunnel (e.g. Tailscale): Google blocks data-center IPs far more than home ones, and ingest + lookups depend on Google |
+| Tests | `cd api && bun test` (56), `cd app && bun test` (4) |
+
+## Next up
+
+In rough order — the user's call:
+
+1. **Shortcuts share workaround** — handle `location://connect?url=…` deep
+   links (`expo-linking` is installed) and document the Shortcut.
+2. **Try it on the iPhone** in Expo Go: live location, paste-a-link, overrides.
+3. **Tap a place → walking directions** in Apple/Google Maps. Tapping a row
+   does nothing yet.
+4. **Hosting** — see Status.
+5. Smaller: renaming subcategories (delete + recreate today); "also fits"
+   chips from Google's other categories for ambiguous places; price is
+   manual only.
+6. Later: validation agent, Postgres (note CLAUDE.md says `Bun.sql`, which
+   conflicts with TypeORM's `pg` driver — decide first).
 
 Run:
 

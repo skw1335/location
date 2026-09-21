@@ -19,7 +19,7 @@ import type { IngestResult, Place } from "../types";
  * deliberately identify as a bot here rather than trying to look like Chrome.
  */
 
-const UA = "location-app/1.0 (+https://github.com/; list ingest)";
+export const UA = "location-app/1.0 (+https://github.com/; list ingest)";
 
 /** Where Google hands back a list id in canonical Maps URLs. */
 const LIST_ID_IN_DATA = /!2s([A-Za-z0-9_-]{16,})/;
@@ -72,7 +72,7 @@ const getlistUrl = (listId: string, pageSize = 500) =>
   );
 
 /** Google prefixes its JSON with `)]}'` to make it non-executable. */
-function parseGuardedJson(body: string): unknown {
+export function parseGuardedJson(body: string): unknown {
   const start = body.indexOf("\n");
   const payload = body.startsWith(")]}'") && start !== -1 ? body.slice(start + 1) : body;
   return JSON.parse(payload);

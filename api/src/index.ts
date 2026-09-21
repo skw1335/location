@@ -1,29 +1,31 @@
 import index from "../public/index.html";
-import { CATEGORIES, isCategory } from "./categorize";
+import { isCategory, normalizeLabel } from "./categorize";
 import {
   allPlaces,
-  categoryCounts,
-  createGroup,
+  categoryOverview,
+  createSubcategory,
+  deleteSubcategory,
   forgetUser,
-  groupsFor,
-  isMember,
-  joinByInvite,
   listAge,
-  personalGroup,
+  rederiveKeywordCategories,
+  type OverridePatch,
   savedLists,
   saveList,
+  setPlaceSubcategories,
   setPlaceOverride,
 } from "./db";
 import { haversine, walkingMinutes } from "./geo";
 import { ingestSharedList } from "./ingest/sharedList";
+import { lookUpPending, rederive } from "./enrich/job";
+import { suggestionsFor } from "./suggestions";
+import { refreshStale, STALE_AFTER_MS } from "./sync";
 
-const STALE_AFTER_MS = 15 * 60 * 1000;
 const DEV = process.env.NODE_ENV !== "production";
 
 /**
  * The app sends an opaque per-device key. It's not identity — it proves nothing
  * about who you are — but it partitions the data so one device can only reach
- * groups it belongs to. When sign-in lands, the account id takes this slot and
+ * its own lists. When sign-in lands, the account id takes this slot and
  * nothing downstream changes.
  */
 const USER_KEY_HEADER = "x-user-key";
@@ -69,29 +71,19 @@ const server = Bun.serve({
       GET: scoped((_req, userKey) => json(savedLists(userKey))),
 
       POST: scoped(async (req, userKey) => {
-        const { url, groupId } = (await req.json()) as {
-          url?: string;
-          groupId?: string;
-        };
+        const { url } = (await req.json()) as { url?: string };
         if (!url?.startsWith("http")) return json({ error: "need a share url" }, 400);
 
-        // No group named means "mine". A named group must be one you're in —
-        // otherwise anyone could write lists into a stranger's feed.
-        let target = groupId;
-        if (target) {
-          if (!isMember(userKey, target)) return json({ error: "not in that group" }, 403);
-        } else {
-          target = personalGroup(userKey).id;
-        }
-
-        const age = listAge(url, target);
+        const age = listAge(url, userKey);
         if (age !== null && age < STALE_AFTER_MS) {
           return json({ cached: true, ageMs: age, lists: savedLists(userKey) });
         }
 
         try {
           const result = await ingestSharedList(url);
-          saveList(url, target, result);
+          saveList(url, userKey, result);
+          // New places need looking up; the app picks up the results on its next load.
+          void lookUpPending();
           return json({
             cached: false,
             name: result.listName,
@@ -111,69 +103,134 @@ const server = Bun.serve({
       }),
     },
 
-    "/api/groups": {
+    // Stale-while-revalidate: the app draws from cache first, then calls this
+    // and redraws only if something changed.
+    "/api/lists/refresh": {
       OPTIONS: preflight,
-
-      // Touching this mints the personal group, so a fresh device always has one.
-      GET: scoped((_req, userKey) => {
-        personalGroup(userKey);
-        return json(groupsFor(userKey));
-      }),
-
-      POST: scoped(async (req, userKey) => {
-        const { name } = (await req.json()) as { name?: string };
-        const trimmed = name?.trim();
-        if (!trimmed) return json({ error: "need a group name" }, 400);
-        return json(createGroup(userKey, trimmed.slice(0, 60)));
+      POST: scoped(async (_req, userKey) => {
+        const summary = await refreshStale(userKey);
+        // Catches places added in Maps, plus anything due a re-check.
+        void lookUpPending();
+        return json(summary);
       }),
     },
 
-    "/api/groups/join": {
+    // Built-in counts, the user's subcategories, cuisines, and ideas for new
+    // subcategories: everything the filter chips and the edit sheet draw from.
+    "/api/categories": scoped((_req, userKey) => {
+      const overview = categoryOverview(userKey);
+      return json({ ...overview, suggestions: suggestionsFor(overview) });
+    }),
+
+    // Users don't make top-level categories — only subcategories inside one of
+    // the built-ins, so "lunch special" always belongs to food.
+    "/api/subcategories": {
       OPTIONS: preflight,
 
       POST: scoped(async (req, userKey) => {
-        const { inviteCode } = (await req.json()) as { inviteCode?: string };
-        if (!inviteCode?.trim()) return json({ error: "need an invite code" }, 400);
-        const group = joinByInvite(userKey, inviteCode);
-        if (!group) return json({ error: "no group with that code" }, 404);
-        return json(group);
+        const body = (await req.json()) as { parent?: string; name?: string };
+        if (!isCategory(body.parent)) {
+          return json({ error: "parent must be an existing category" }, 400);
+        }
+        const name = normalizeLabel(body.name);
+        if (!name) return json({ error: "name must be 1–40 characters" }, 400);
+        if (isCategory(name)) return json({ error: `"${name}" is already a category` }, 409);
+        return json(createSubcategory(userKey, body.parent, name));
+      }),
+
+      DELETE: scoped((req, userKey) => {
+        const { searchParams } = new URL(req.url);
+        const parent = searchParams.get("parent");
+        const name = normalizeLabel(searchParams.get("name"));
+        if (!isCategory(parent) || !name || !deleteSubcategory(userKey, parent, name)) {
+          return json({ error: "no such subcategory" }, 404);
+        }
+        return json({ deleted: name });
+      }),
+    },
+
+    // Correct a category, set a cuisine or price, or hide a place outright. All
+    // user judgements, so they survive every later refresh of the list.
+    "/api/places/override": {
+      OPTIONS: preflight,
+      POST: scoped(async (req, userKey) => {
+        const body = (await req.json()) as {
+          placeId?: string;
+          category?: string | null;
+          cuisine?: string | null;
+          price?: number | null;
+          hidden?: boolean;
+        };
+        if (!body.placeId) return json({ error: "need a placeId" }, 400);
+
+        // null means "back to automatic" for any of these.
+        const patch: OverridePatch = { hidden: body.hidden };
+        if (body.category !== undefined) {
+          // Only built-ins here; the user's own categories are applied separately.
+          if (body.category !== null && !isCategory(body.category)) {
+            return json({ error: "category must be a built-in one" }, 400);
+          }
+          patch.category = body.category;
+        }
+        if (body.cuisine !== undefined) {
+          const cuisine = body.cuisine === null ? null : normalizeLabel(body.cuisine);
+          if (body.cuisine !== null && !cuisine) {
+            return json({ error: "cuisine must be 1–40 characters" }, 400);
+          }
+          patch.cuisine = cuisine;
+        }
+        if (body.price !== undefined) {
+          if (body.price !== null && ![1, 2, 3, 4].includes(body.price)) {
+            return json({ error: "price must be 1–4, or null" }, 400);
+          }
+          patch.price = body.price;
+        }
+
+        if (!setPlaceOverride(userKey, body.placeId, patch)) {
+          return json({ error: "no such place in your lists" }, 404);
+        }
+        return json({ ok: true });
+      }),
+    },
+
+    // Sets exactly which subcategories a place carries, from those inside its
+    // current category. Sending the whole set keeps the client simple: a tap
+    // is just "here's the new set".
+    "/api/places/subcategories": {
+      OPTIONS: preflight,
+      POST: scoped(async (req, userKey) => {
+        const { placeId, names } = (await req.json()) as { placeId?: string; names?: unknown };
+        if (!placeId) return json({ error: "need a placeId" }, 400);
+        if (!Array.isArray(names) || names.length > 20) {
+          return json({ error: "names must be a list of at most 20" }, 400);
+        }
+        const clean = [...new Set(names.map(normalizeLabel))];
+        if (clean.includes(null)) return json({ error: "each name must be 1–40 characters" }, 400);
+
+        const result = setPlaceSubcategories(userKey, placeId, clean as string[]);
+        if (!result.ok && result.error === "no such place") {
+          return json({ error: "no such place in your lists" }, 404);
+        }
+        if (!result.ok) {
+          return json({ error: `not a subcategory of this place's category: ${result.names?.join(", ")}` }, 400);
+        }
+        return json(result);
       }),
     },
 
     // Everything the app needs to render a screen: places, sorted by how far
     // the user actually has to walk.
-    "/api/categories": scoped((_req, userKey) => json(categoryCounts(userKey))),
-
-    // Correct a category, or hide a place outright. Both are user judgements,
-    // so they survive every later refresh of the underlying list.
-    "/api/places/override": {
-      OPTIONS: preflight,
-      POST: scoped(async (req, userKey) => {
-        const { placeId, category, hidden } = (await req.json()) as {
-          placeId?: string;
-          category?: string;
-          hidden?: boolean;
-        };
-        if (!placeId) return json({ error: "need a placeId" }, 400);
-        if (category !== undefined && !isCategory(category)) {
-          return json({ error: `category must be one of: ${CATEGORIES.join(", ")}` }, 400);
-        }
-        const updated = setPlaceOverride(userKey, placeId, { category, hidden });
-        if (!updated) return json({ error: "no such place in your lists" }, 404);
-        return json({ ok: true, groups: updated });
-      }),
-    },
-
     "/api/places": scoped((req, userKey) => {
       const { searchParams } = new URL(req.url);
       const lat = Number(searchParams.get("lat"));
       const lng = Number(searchParams.get("lng"));
 
-      const wanted = searchParams.get("category");
-      if (wanted !== null && !isCategory(wanted)) {
-        return json({ error: `unknown category "${wanted}"` }, 400);
+      const filter = (key: string) => normalizeLabel(searchParams.get(key)) ?? undefined;
+      const place = { category: filter("category"), subcategory: filter("subcategory") };
+      if (place.subcategory && !place.category) {
+        return json({ error: "subcategory needs its category" }, 400);
       }
-      const places = allPlaces(userKey, wanted ?? undefined);
+      const places = allPlaces(userKey, { ...place, cuisine: filter("cuisine") });
 
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
         return json(places.map((p) => ({ ...p, metres: null, walkMinutes: null })));
@@ -192,3 +249,10 @@ const server = Bun.serve({
 });
 
 console.log(`listening on ${server.url}`);
+
+// Apply any change to the categorisation rules to places already stored —
+// keyword guesses and Google lookups alike — then pick up anything a previous
+// lookup run didn't reach.
+rederiveKeywordCategories();
+rederive();
+void lookUpPending();

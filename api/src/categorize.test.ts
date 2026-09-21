@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { categorize, isCategory } from "./categorize";
+import { categorize, isCategory, normalizeLabel } from "./categorize";
 
 test("matches distinctive tokens regardless of word boundaries", () => {
   // Business names run words together and pluralise; both defeated the first
@@ -40,4 +40,12 @@ test("isCategory guards the API surface", () => {
   expect(isCategory("food")).toBe(true);
   expect(isCategory("nonsense")).toBe(false);
   expect(isCategory(null)).toBe(false);
+});
+
+test("user categories are normalised so duplicates collapse", () => {
+  expect(normalizeLabel("  Date   Bar ")).toBe("date bar");
+  expect(normalizeLabel("")).toBeNull();
+  expect(normalizeLabel("   ")).toBeNull();
+  expect(normalizeLabel("x".repeat(41))).toBeNull();
+  expect(normalizeLabel(42)).toBeNull();
 });
