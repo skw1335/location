@@ -1,0 +1,17 @@
+{
+  "name": "location-api",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "probe": "bun src/probe.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "puppeteer": "^25.6.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

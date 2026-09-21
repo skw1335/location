@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>location</title>
+    <style>
+      :root { color-scheme: light dark; --line: color-mix(in srgb, currentColor 15%, transparent); }
+      body {
+        font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        max-width: 34rem; margin: 0 auto; padding: 2rem 1rem 4rem;
+      }
+      h1 { font-size: 1.1rem; margin: 0 0 1.5rem; }
+      form { display: flex; gap: .5rem; margin-bottom: .75rem; }
+      input, button {
+        font: inherit; padding: .5rem .7rem; border-radius: .5rem;
+        border: 1px solid var(--line); background: transparent; color: inherit;
+      }
+      input { flex: 1; min-width: 0; }
+      button { cursor: pointer; }
+      button:disabled { opacity: .5; cursor: default; }
+      #status { font-size: .85rem; opacity: .7; min-height: 1.5em; }
+      ul { list-style: none; padding: 0; margin: 1.5rem 0 0; }
+      li { padding: .7rem 0; border-top: 1px solid var(--line); display: flex; gap: 1rem; }
+      .name { flex: 1; }
+      .list-tag { font-size: .8rem; opacity: .6; }
+      .dist { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+      .walk { font-size: .8rem; opacity: .6; }
+    </style>
+  </head>
+  <body>
+    <h1>location</h1>
+
+    <form id="connect">
+      <input
+        id="url"
+        type="url"
+        placeholder="Paste a Google Maps shared list link"
+        required
+      />
+      <button type="submit">Connect</button>
+    </form>
+    <div id="status"></div>
+
+    <button id="locate">Sort by distance from me</button>
+    <ul id="places"></ul>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const status = $("status");
+      let coords = null;
+
+      /**
+       * Same opaque per-device key the app mints, kept in localStorage. Not
+       * identity — it just partitions the cache. The server rejects any request
+       * without one, so every fetch below goes through `api()`.
+       */
+      const KEY = "location.userKey";
+      let userKey = localStorage.getItem(KEY);
+      if (!userKey) localStorage.setItem(KEY, (userKey = crypto.randomUUID()));
+
+      const api = (path, init) =>
+        fetch(path, {
+          ...init,
+          headers: { "Content-Type": "application/json", "X-User-Key": userKey, ...init?.headers },
+        });
+
+      const fmt = (m) => (m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1)} km`);
+
+      async function render() {
+        const q = coords ? `?lat=${coords.lat}&lng=${coords.lng}` : "";
+        const places = await api(`/api/places${q}`).then((r) => r.json());
+
+        $("places").innerHTML = places
+          .map(
+            (p) => `
+            <li>
+              <span class="name">${p.name}
+                <div class="list-tag">${p.listName ?? ""}</div>
+              </span>
+              <span class="dist">${
+                p.metres === null
+                  ? ""
+                  : `${fmt(p.metres)}<div class="walk">${p.walkMinutes} min walk</div>`
+              }</span>
+            </li>`,
+          )
+          .join("");
+
+        if (!places.length) status.textContent = "No places yet — connect a list above.";
+      }
+
+      $("connect").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const button = e.target.querySelector("button");
+        button.disabled = true;
+        status.textContent = "Fetching…";
+
+        const res = await api("/api/lists", {
+          method: "POST",
+          body: JSON.stringify({ url: $("url").value }),
+        });
+        const data = await res.json();
+
+        status.textContent = data.error
+          ? `Failed: ${data.error}`
+          : data.cached
+            ? "Already cached (fetched recently)."
+            : `Parsed ${data.count} places from "${data.name}" via ${data.strategy} strategy.`;
+
+        button.disabled = false;
+        render();
+      });
+
+      $("locate").addEventListener("click", () => {
+        status.textContent = "Asking for location…";
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            status.textContent = `At ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`;
+            render();
+          },
+          (err) => (status.textContent = `Location failed: ${err.message}`),
+        );
+      });
+
+      render();
+    </script>
+  </body>
+</html>
