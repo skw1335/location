@@ -46,18 +46,18 @@ async function run({
   limit = PER_RUN,
 }: { fetcher?: Fetcher; gapMs?: number; limit?: number }): Promise<LookupSummary> {
   const summary: LookupSummary = { matched: 0, missed: 0, failed: 0 };
-  const due = placesToLookUp(limit);
+  const due = await placesToLookUp(limit);
 
   for (const [i, place] of due.entries()) {
     if (i > 0 && gapMs) await Bun.sleep(gapMs);
     try {
       const match = await lookUp(place, fetcher);
       if (!match) {
-        saveLookup(place.id, { status: "no_match" });
+        await saveLookup(place.id, { status: "no_match" });
         summary.missed++;
         continue;
       }
-      saveLookup(place.id, {
+      await saveLookup(place.id, {
         status: "matched",
         googleId: match.googleId,
         googleCategories: match.categories,
@@ -65,7 +65,7 @@ async function run({
       });
       summary.matched++;
     } catch {
-      saveLookup(place.id, { status: "error" });
+      await saveLookup(place.id, { status: "error" });
       summary.failed++;
     }
   }

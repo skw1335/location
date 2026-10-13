@@ -10,7 +10,7 @@ import {
   setPlaceSubcategories,
 } from "./categories/subcategories";
 import { suggestionsFor } from "./categories/suggestions";
-import { forgetUser } from "./db";
+import { forgetUser, migrate } from "./db";
 import { listAge, savedLists, saveList } from "./importing/lists";
 import { ingestSharedList } from "./importing/sharedList";
 import { refreshStale, STALE_AFTER_MS } from "./importing/sync";
@@ -57,6 +57,8 @@ function scoped(
   };
 }
 
+await migrate();
+
 const server = Bun.serve({
   port: Number(process.env.PORT ?? 3000),
   routes: {
@@ -65,20 +67,20 @@ const server = Bun.serve({
     "/api/lists": {
       OPTIONS: preflight,
 
-      GET: scoped((_req, userKey) => json(savedLists(userKey))),
+      GET: scoped(async (_req, userKey) => json(await savedLists(userKey))),
 
       POST: scoped(async (req, userKey) => {
         const { url } = (await req.json()) as { url?: string };
         if (!url?.startsWith("http")) return json({ error: "need a share url" }, 400);
 
-        const age = listAge(url, userKey);
+        const age = await listAge(url, userKey);
         if (age !== null && age < STALE_AFTER_MS) {
-          return json({ cached: true, ageMs: age, lists: savedLists(userKey) });
+          return json({ cached: true, ageMs: age, lists: await savedLists(userKey) });
         }
 
         try {
           const result = await ingestSharedList(url);
-          saveList(url, userKey, result);
+          await saveList(url, userKey, result);
           // New places need looking up; the app picks up the results on its next load.
           void lookUpPending();
           return json({
@@ -86,7 +88,7 @@ const server = Bun.serve({
             name: result.listName,
             count: result.places.length,
             strategy: result.strategy,
-            lists: savedLists(userKey),
+            lists: await savedLists(userKey),
           });
         } catch (err) {
           return json({ error: String(err) }, 502);
@@ -94,8 +96,8 @@ const server = Bun.serve({
       }),
 
       // Deletable from day one, per SPEC.md — not bolted on after there's data to lose.
-      DELETE: scoped((_req, userKey) => {
-        forgetUser(userKey);
+      DELETE: scoped(async (_req, userKey) => {
+        await forgetUser(userKey);
         return json({ deleted: true });
       }),
     },
@@ -114,8 +116,8 @@ const server = Bun.serve({
 
     // Built-in counts, the user's subcategories, cuisines, and ideas for new
     // subcategories: everything the filter chips and the edit sheet draw from.
-    "/api/categories": scoped((_req, userKey) => {
-      const overview = categoryOverview(userKey);
+    "/api/categories": scoped(async (_req, userKey) => {
+      const overview = await categoryOverview(userKey);
       return json({ ...overview, suggestions: suggestionsFor(overview) });
     }),
 
@@ -132,14 +134,14 @@ const server = Bun.serve({
         const name = normalizeLabel(body.name);
         if (!name) return json({ error: "name must be 1–40 characters" }, 400);
         if (isCategory(name)) return json({ error: `"${name}" is already a category` }, 409);
-        return json(createSubcategory(userKey, body.parent, name));
+        return json(await createSubcategory(userKey, body.parent, name));
       }),
 
-      DELETE: scoped((req, userKey) => {
+      DELETE: scoped(async (req, userKey) => {
         const { searchParams } = new URL(req.url);
         const parent = searchParams.get("parent");
         const name = normalizeLabel(searchParams.get("name"));
-        if (!isCategory(parent) || !name || !deleteSubcategory(userKey, parent, name)) {
+        if (!isCategory(parent) || !name || !(await deleteSubcategory(userKey, parent, name))) {
           return json({ error: "no such subcategory" }, 404);
         }
         return json({ deleted: name });
@@ -183,7 +185,7 @@ const server = Bun.serve({
           patch.price = body.price;
         }
 
-        if (!setPlaceOverride(userKey, body.placeId, patch)) {
+        if (!(await setPlaceOverride(userKey, body.placeId, patch))) {
           return json({ error: "no such place in your lists" }, 404);
         }
         return json({ ok: true });
@@ -204,7 +206,7 @@ const server = Bun.serve({
         const clean = [...new Set(names.map(normalizeLabel))];
         if (clean.includes(null)) return json({ error: "each name must be 1–40 characters" }, 400);
 
-        const result = setPlaceSubcategories(userKey, placeId, clean as string[]);
+        const result = await setPlaceSubcategories(userKey, placeId, clean as string[]);
         if (!result.ok && result.error === "no such place") {
           return json({ error: "no such place in your lists" }, 404);
         }
@@ -217,7 +219,7 @@ const server = Bun.serve({
 
     // Everything the app needs to render a screen: places, sorted by how far
     // the user actually has to walk.
-    "/api/places": scoped((req, userKey) => {
+    "/api/places": scoped(async (req, userKey) => {
       const { searchParams } = new URL(req.url);
       const lat = Number(searchParams.get("lat"));
       const lng = Number(searchParams.get("lng"));
@@ -227,7 +229,7 @@ const server = Bun.serve({
       if (place.subcategory && !place.category) {
         return json({ error: "subcategory needs its category" }, 400);
       }
-      const places = allPlaces(userKey, { ...place, cuisine: filter("cuisine") });
+      const places = await allPlaces(userKey, { ...place, cuisine: filter("cuisine") });
 
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
         return json(places.map((p) => ({ ...p, metres: null, walkMinutes: null })));
@@ -245,6 +247,6 @@ console.log(`listening on ${server.url}`);
 // Apply any change to the categorisation rules to places already stored —
 // keyword guesses and Google lookups alike — then pick up anything a previous
 // lookup run didn't reach.
-rederiveKeywordCategories();
-rederive();
+await rederiveKeywordCategories();
+await rederive();
 void lookUpPending();

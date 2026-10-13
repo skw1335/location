@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
 import type { IngestResult, Place } from "../types";
 
-// db.ts opens its database at import time, so the path has to be set first.
-process.env.DB_PATH = `/tmp/location-test-${crypto.randomUUID()}.sqlite`;
-
 const { allPlaces } = await import("../places");
 const { saveList } = await import("./lists");
 const { refreshStale, STALE_AFTER_MS } = await import("./sync");
@@ -18,21 +15,21 @@ const result = (names: string[], fetchedAt = Date.now()): IngestResult => ({
 });
 
 const longAgo = () => Date.now() - STALE_AFTER_MS - 1000;
-const names = (userKey: string) => allPlaces(userKey).map((p) => p.name).sort();
+const names = async (userKey: string) => (await allPlaces(userKey)).map((p) => p.name).sort();
 
 test("stale lists pick up new places", async () => {
   const user = "sync-new-places-0000";
-  saveList("https://x/a", user, result(["one"], longAgo()));
+  await saveList("https://x/a", user, result(["one"], longAgo()));
 
   const summary = await refreshStale(user, async () => result(["one", "two"]));
 
   expect(summary).toEqual({ checked: 1, changed: 1, failed: 0 });
-  expect(names(user)).toEqual(["one", "two"]);
+  expect(await names(user)).toEqual(["one", "two"]);
 });
 
 test("fresh lists aren't fetched at all", async () => {
   const user = "sync-fresh-000000000";
-  saveList("https://x/a", user, result(["one"]));
+  await saveList("https://x/a", user, result(["one"]));
 
   let calls = 0;
   const summary = await refreshStale(user, async () => (calls++, result(["one"])));
@@ -43,7 +40,7 @@ test("fresh lists aren't fetched at all", async () => {
 
 test("an unchanged list counts as checked, not changed", async () => {
   const user = "sync-unchanged-00000";
-  saveList("https://x/a", user, result(["one"], longAgo()));
+  await saveList("https://x/a", user, result(["one"], longAgo()));
 
   const summary = await refreshStale(user, async () => result(["one"]));
 
@@ -54,22 +51,22 @@ test("an unchanged list counts as checked, not changed", async () => {
 
 test("a broken parse keeps yesterday's places", async () => {
   const user = "sync-broken-parse-00";
-  saveList("https://x/a", user, result(["one", "two"], longAgo()));
+  await saveList("https://x/a", user, result(["one", "two"], longAgo()));
 
   const summary = await refreshStale(user, async () => result([]));
 
   expect(summary.failed).toBe(1);
-  expect(names(user)).toEqual(["one", "two"]);
+  expect(await names(user)).toEqual(["one", "two"]);
 });
 
 test("a failed fetch keeps yesterday's places", async () => {
   const user = "sync-fetch-fails-000";
-  saveList("https://x/a", user, result(["one"], longAgo()));
+  await saveList("https://x/a", user, result(["one"], longAgo()));
 
   const summary = await refreshStale(user, async () => {
     throw new Error("502");
   });
 
   expect(summary.failed).toBe(1);
-  expect(names(user)).toEqual(["one"]);
+  expect(await names(user)).toEqual(["one"]);
 });

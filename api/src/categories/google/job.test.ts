@@ -2,9 +2,6 @@ import { beforeEach, expect, test } from "bun:test";
 import type { IngestResult } from "../../types";
 import { mapsResponse } from "./fixture";
 
-// db.ts opens its database at import time, so the path has to be set first.
-process.env.DB_PATH = `/tmp/location-test-${crypto.randomUUID()}.sqlite`;
-
 const { allPlaces } = await import("../../places");
 const { saveList } = await import("../../importing/lists");
 const { setPlaceOverride } = await import("../overrides");
@@ -52,19 +49,19 @@ beforeEach(async () => {
   const nothing = async () => mapsResponse([]);
   while (Object.values(await run(nothing)).some(Boolean)) {}
 });
-const cuisine = (user: string, name: string) => {
-  const p = allPlaces(user).find((x) => x.name === name);
+const cuisine = async (user: string, name: string) => {
+  const p = (await allPlaces(user)).find((x) => x.name === name);
   return { cuisine: p?.cuisine, source: p?.cuisineSource };
 };
 
 test("looked-up cuisines show on places, and each place is only looked up once", async () => {
   const user = "lookup-basic-0000000";
-  saveList("https://x/a", user, list([place("Chama Mama", 40.7068, -73.9321), place("Nowhere Cafe", 40.7, -73.9)]));
+  await saveList("https://x/a", user, list([place("Chama Mama", 40.7068, -73.9321), place("Nowhere Cafe", 40.7, -73.9)]));
   const google = fakeGoogle({ "Chama Mama": ["Georgian restaurant", "Restaurant"] });
 
   expect(await run(google.fetcher)).toEqual({ matched: 1, missed: 1, failed: 0 });
-  expect(cuisine(user, "Chama Mama")).toEqual({ cuisine: "georgian", source: "google" });
-  expect(cuisine(user, "Nowhere Cafe")).toEqual({ cuisine: null, source: null });
+  expect(await cuisine(user, "Chama Mama")).toEqual({ cuisine: "georgian", source: "google" });
+  expect(await cuisine(user, "Nowhere Cafe")).toEqual({ cuisine: null, source: null });
 
   // Both outcomes are remembered; nothing is due again yet.
   const before = google.calls;
@@ -74,77 +71,77 @@ test("looked-up cuisines show on places, and each place is only looked up once",
 
 test("the user's cuisine beats Google's, and clearing it brings Google's back", async () => {
   const user = "lookup-override-0000";
-  saveList("https://x/b", user, list([place("Los Tacos No. 1", 40.7423, -74.006)]));
+  await saveList("https://x/b", user, list([place("Los Tacos No. 1", 40.7423, -74.006)]));
   await run(fakeGoogle({ "Los Tacos No. 1": ["Taco restaurant", "Mexican restaurant"] }).fetcher);
-  expect(cuisine(user, "Los Tacos No. 1")).toEqual({ cuisine: "mexican", source: "google" });
+  expect(await cuisine(user, "Los Tacos No. 1")).toEqual({ cuisine: "mexican", source: "google" });
 
-  const id = allPlaces(user)[0]!.id;
-  setPlaceOverride(user, id, { cuisine: "tex-mex" });
-  expect(cuisine(user, "Los Tacos No. 1")).toEqual({ cuisine: "tex-mex", source: "override" });
+  const id = (await allPlaces(user))[0]!.id;
+  await setPlaceOverride(user, id, { cuisine: "tex-mex" });
+  expect(await cuisine(user, "Los Tacos No. 1")).toEqual({ cuisine: "tex-mex", source: "override" });
 
-  setPlaceOverride(user, id, { cuisine: null });
-  expect(cuisine(user, "Los Tacos No. 1")).toEqual({ cuisine: "mexican", source: "google" });
+  await setPlaceOverride(user, id, { cuisine: null });
+  expect(await cuisine(user, "Los Tacos No. 1")).toEqual({ cuisine: "mexican", source: "google" });
 });
 
 test("a lookup survives the list being refreshed", async () => {
   const user = "lookup-refresh-00000";
   const places = [place("Joe's Pizza", 40.7306, -73.9894)];
-  saveList("https://x/c", user, list(places));
+  await saveList("https://x/c", user, list(places));
   await run(fakeGoogle({ "Joe's Pizza": ["Pizza restaurant"] }).fetcher);
-  saveList("https://x/c", user, { ...list(places), listName: "renamed" });
-  expect(cuisine(user, "Joe's Pizza").cuisine).toBe("pizza");
+  await saveList("https://x/c", user, { ...list(places), listName: "renamed" });
+  expect((await cuisine(user, "Joe's Pizza")).cuisine).toBe("pizza");
 });
 
 test("a failed request is recorded and doesn't stop the run", async () => {
   const user = "lookup-errors-000000";
-  saveList("https://x/d", user, list([place("Broken", 40.7, -73.9), place("Katz's Deli", 40.722, -73.987)]));
+  await saveList("https://x/d", user, list([place("Broken", 40.7, -73.9), place("Katz's Deli", 40.722, -73.987)]));
   const summary = await run(async (url) => {
     if (url.includes("Broken")) throw new Error("429");
     return mapsResponse([{ name: "Katz's Deli", categories: ["Deli"], lat: 40.722, lng: -73.987 }]);
   });
   expect(summary).toEqual({ matched: 1, missed: 0, failed: 1 });
-  expect(cuisine(user, "Katz's Deli").cuisine).toBe("deli");
+  expect((await cuisine(user, "Katz's Deli")).cuisine).toBe("deli");
 });
 
-const categoryOf = (user: string, name: string) => {
-  const p = allPlaces(user).find((x) => x.name === name);
+const categoryOf = async (user: string, name: string) => {
+  const p = (await allPlaces(user)).find((x) => x.name === name);
   return { category: p?.category, source: p?.categorySource };
 };
 
 test("Google's category replaces the keyword guess", async () => {
   const user = "lookup-category-0000";
   // The keyword rules call this "other": nothing in the name says restaurant.
-  saveList("https://x/e", user, list([place("Phayul", 40.7478, -73.8918)]));
-  expect(categoryOf(user, "Phayul").category).toBe("other");
+  await saveList("https://x/e", user, list([place("Phayul", 40.7478, -73.8918)]));
+  expect((await categoryOf(user, "Phayul")).category).toBe("other");
 
   await run(fakeGoogle({ Phayul: ["Tibetan restaurant"] }).fetcher);
-  expect(categoryOf(user, "Phayul")).toEqual({ category: "food", source: "google" });
-  expect(cuisine(user, "Phayul").cuisine).toBe("tibetan");
+  expect(await categoryOf(user, "Phayul")).toEqual({ category: "food", source: "google" });
+  expect((await cuisine(user, "Phayul")).cuisine).toBe("tibetan");
 });
 
-test("setting a cuisine makes a place food", () => {
+test("setting a cuisine makes a place food", async () => {
   const user = "cuisine-means-food00";
-  saveList("https://x/f", user, list([place("Mystery Spot", 40.7, -73.9)]));
-  const id = allPlaces(user)[0]!.id;
-  expect(categoryOf(user, "Mystery Spot").category).toBe("other");
+  await saveList("https://x/f", user, list([place("Mystery Spot", 40.7, -73.9)]));
+  const id = (await allPlaces(user))[0]!.id;
+  expect((await categoryOf(user, "Mystery Spot")).category).toBe("other");
 
-  setPlaceOverride(user, id, { cuisine: "tibetan" });
-  expect(categoryOf(user, "Mystery Spot")).toEqual({ category: "food", source: "override" });
+  await setPlaceOverride(user, id, { cuisine: "tibetan" });
+  expect(await categoryOf(user, "Mystery Spot")).toEqual({ category: "food", source: "override" });
 
   // An explicit category of the user's still wins.
-  setPlaceOverride(user, id, { category: "drink" });
-  expect(categoryOf(user, "Mystery Spot").category).toBe("drink");
+  await setPlaceOverride(user, id, { category: "drink" });
+  expect((await categoryOf(user, "Mystery Spot")).category).toBe("drink");
 });
 
 test("changed mapping rules apply to stored lookups without asking Google again", async () => {
   const user = "lookup-rederive-0000";
-  saveList("https://x/g", user, list([place("Vanessa's", 40.7187, -73.9909)]));
+  await saveList("https://x/g", user, list([place("Vanessa's", 40.7187, -73.9909)]));
   const google = fakeGoogle({ "Vanessa's": ["Restaurant", "Asian restaurant", "Chinese noodle restaurant"] });
   await run(google.fetcher);
-  expect(cuisine(user, "Vanessa's").cuisine).toBe("chinese");
+  expect((await cuisine(user, "Vanessa's")).cuisine).toBe("chinese");
 
   const calls = google.calls;
-  expect(rederive()).toBeGreaterThan(0);
+  expect(await rederive()).toBeGreaterThan(0);
   expect(google.calls).toBe(calls);
-  expect(cuisine(user, "Vanessa's").cuisine).toBe("chinese");
+  expect((await cuisine(user, "Vanessa's")).cuisine).toBe("chinese");
 });

@@ -1,0 +1,3 @@
+[test]
+# Gives the test run its own throwaway Postgres database.
+preload = ["./src/testDatabase.ts"]

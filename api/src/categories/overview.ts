@@ -1,5 +1,4 @@
-import { db } from "../db";
-import { ACTIVE_SUB, EFFECTIVE } from "./effective";
+import { sql } from "../db";
 
 export interface Count {
   name: string;
@@ -15,39 +14,29 @@ export interface Subcategory extends Count {
  * Everything the filter chips and the edit sheet need, in one read. Counts are
  * of distinct places — a place saved in two lists counts once.
  */
-export function categoryOverview(userKey: string): {
+export async function categoryOverview(userKey: string): Promise<{
   builtIn: Count[];
   subcategories: Subcategory[];
   cuisines: Count[];
-} {
-  const distinct = `SELECT DISTINCT user_key, id, eff_category, eff_cuisine FROM (${EFFECTIVE})`;
+}> {
+  const distinct = sql`
+    (SELECT DISTINCT user_key, id, category, cuisine FROM effective_places
+      WHERE user_key = ${userKey})`;
 
-  const builtIn = db
-    .query(
-      `SELECT eff_category AS name, COUNT(*) AS count FROM (${distinct})
-       GROUP BY 1 ORDER BY count DESC, name`,
-    )
-    .all(userKey) as Count[];
-
-  // Every subcategory, even unused ones — the user made them on purpose.
-  const subcategories = db
-    .query(
-      `SELECT k.parent, k.name,
-              (SELECT COUNT(*) FROM (${distinct}) e
-                 JOIN place_subcategories s ON ${ACTIVE_SUB}
-                WHERE s.parent = k.parent AND s.name = k.name) AS count
-       FROM subcategories k
-       WHERE k.user_key = ?1
-       ORDER BY k.parent, count DESC, k.name`,
-    )
-    .all(userKey) as Subcategory[];
-
-  const cuisines = db
-    .query(
-      `SELECT eff_cuisine AS name, COUNT(*) AS count FROM (${distinct})
-       WHERE eff_cuisine IS NOT NULL GROUP BY 1 ORDER BY count DESC, name`,
-    )
-    .all(userKey) as Count[];
-
+  const [builtIn, subcategories, cuisines] = await Promise.all([
+    sql`SELECT category AS name, COUNT(*)::int AS count FROM ${distinct} e
+        GROUP BY 1 ORDER BY count DESC, name`,
+    // Every subcategory, even unused ones — the user made them on purpose.
+    sql`SELECT k.parent, k.name,
+               (SELECT COUNT(*)::int FROM ${distinct} e
+                  JOIN place_subcategories s
+                    ON s.user_key = e.user_key AND s.place_id = e.id AND s.parent = e.category
+                 WHERE s.parent = k.parent AND s.name = k.name) AS count
+        FROM subcategories k
+        WHERE k.user_key = ${userKey}
+        ORDER BY k.parent, count DESC, k.name`,
+    sql`SELECT cuisine AS name, COUNT(*)::int AS count FROM ${distinct} e
+        WHERE cuisine IS NOT NULL GROUP BY 1 ORDER BY count DESC, name`,
+  ]);
   return { builtIn, subcategories, cuisines };
 }

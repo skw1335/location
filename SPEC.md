@@ -31,10 +31,10 @@ Every open after that: saved places, nearest first, always current.
 ## Architecture
 
 ```
-Expo app  ──►  Bun API  ──►  SQLite cache
-(iOS/Android/web)              ▲
+Expo app  ──►  Bun API  ──►  Postgres (ParadeDB)
+(iOS/web)                      ▲
                                │
-                    ingest/ (pluggable)
+                    importing/ (pluggable)
                     ├─ sharedList.ts   ← primary
                     └─ takeout.ts      ← optional fallback
 
@@ -96,7 +96,7 @@ at any time and access dies immediately.
 
 ## The extractor
 
-**Status: working** (`api/src/ingest/sharedList.ts`, verified 2026-08-11
+**Status: working** (`api/src/importing/sharedList.ts`, verified 2026-08-11
 against a real 11-place list). Two plain HTTP GETs, no browser:
 
 1. The share link (`maps.app.goo.gl/XXXX`) 302s to a canonical Maps URL
@@ -140,7 +140,7 @@ jazz club) are theirs to call.
    tacos stays a bar. Specific beats regional ("Chinese noodle" over
    "Asian").
 
-   Both come from a background lookup (`api/src/enrich/`): it searches Maps'
+   Both come from a background lookup (`api/src/categories/google/`): it searches Maps'
    internal `tbm=map` endpoint for each place by name, centred on its
    coordinates, and takes the nearest result with a matching name within
    150 m. Unofficial like list ingest, so paced at one request per 1.5s, 40
@@ -168,29 +168,16 @@ fair readings of Google's primary category (e.g. a "jazz" bar Google lists as
 
 ## Deferred
 
-- **Self-healing parser** — when extraction returns 0 places, an agent reads the
-  DOM and proposes new selectors for review. The agent should *repair the
-  parser*, never *be* the parser: a hallucinated lat/lng puts a restaurant in
-  New Jersey and nothing would catch it. Keep runtime extraction deterministic.
-- **Real walking routes** — filter by straight-line radius first, then Routes
-  API for the top ~20 only. Current estimate is haversine ÷ 80 m/min.
-- **Validation agent** — double-checks automatic categories. Parked until the
-  core app is fleshed out.
-- **Places API enrichment** — hours, ratings, photos. Note: `place_id` may be
-  cached indefinitely, other Places fields ~30 days.
-- **Groups / sharing lists with friends** — out of scope until the solo
-  experience is good. An earlier group-based model (invite codes, shared
-  feeds) is in git history at `82cca3e`.
-- **Postgres + migrations** — move off SQLite to a real Postgres database with
-  a migration tool once the schema settles.
-- **Auth** — Google sign-in for *identity only*, when there's a second user and
-  cross-device sync matters. Grants nothing about saved places.
-- **Takeout importer** — sanctioned fallback and backlog seeding. CSV is thin
-  (Title, Note, URL, Comment — no coordinates), so it needs a resolution step.
+Feature ideas and parked work live in [FEATURES.md](FEATURES.md).
 
 ---
 
 ## Data model
+
+Postgres via `Bun.sql`; schema in `api/src/schema.sql`, applied idempotently
+at startup (real migrations once it settles). Local database is ParadeDB in
+Docker (`compose.yaml`) — Postgres 18 plus `pg_search` (BM25 full-text),
+PostGIS and pgvector, none used yet.
 
 ```sql
 lists           (url, user_key, name, strategy, fetched_at, content_hash,
@@ -206,6 +193,8 @@ place_subcategories (user_key, place_id, parent, name, created_at,
                      PRIMARY KEY (user_key, place_id, parent, name))
 place_lookups       (place_id PK, status, google_id, google_categories,
                      category, cuisine, checked_at)   -- shared across users
+effective_places    VIEW: each place with the winning category/cuisine/price
+                    (override > Google > keyword), hidden places removed
 ```
 
 `user_key` is the opaque per-device key the app sends. Everything is scoped by
@@ -244,23 +233,37 @@ registering anything with Apple.
 
 ---
 
+## Code layout (`api/src`)
+
+Grouped by feature; each folder holds its logic and its own queries.
+
+| | |
+|---|---|
+| `index.ts` | HTTP routes (`Bun.serve`) |
+| `db.ts`, `schema.sql` | Postgres connection, schema, delete-my-data |
+| `places.ts` | the main read: a user's places with effective values and filters |
+| `importing/` | shared-list fetch (`sharedList`), list cache (`lists`), background refresh (`sync`) |
+| `categories/` | keyword rules, override precedence (`effective`), overrides, subcategories, suggestions, startup re-derive |
+| `categories/google/` | background Google Maps lookup → category + cuisine |
+| `distance/` | haversine, walking-time estimate, nearest-first sort |
+
 ## Status
 
 | | |
 |---|---|
-| Bun API, routes, SQLite cache | ✅ working |
+| Bun API, routes, Postgres (ParadeDB) | ✅ working, 2026-10-13 |
 | List ingest (`getlist` plain fetch) | ✅ verified on a real 16-place list, 2026-09-21 |
 | Background list refresh (stale-while-revalidate, 15 min) | ✅ working |
 | Categorization: Google lookup → category + cuisine | ✅ working (see Categorization) |
 | User overrides: category, cuisine, price, hide | ✅ working |
 | User subcategories (inside a built-in) | ✅ working |
-| Distance sort (haversine + walk estimate) | ✅ working |
+| Distance sort (straight line, ×1.2 for walk time) | ✅ checked against real NYC walks, 2026-10-13 (see FEATURES.md) |
 | Live location in app (re-sorts every 50 m) | ✅ in code — not yet tried on a phone |
 | Expo app (iOS / web) | ✅ type-checks, web build clean |
 | Connect a list | ✅ paste-a-link; share extension configured (see iOS distribution) |
 | Minimal web UI (`api/public`) | ✅ working |
 | Hosting the API | ⏸ later — runs on the Mac. Prefer the Mac + a private tunnel (e.g. Tailscale): Google blocks data-center IPs far more than home ones, and ingest + lookups depend on Google |
-| Tests | `cd api && bun test` (56), `cd app && bun test` (4) |
+| Tests | `cd api && bun test` (60, needs the database up — each run uses a throwaway one), `cd app && bun test` (4) |
 
 ## Next up
 
@@ -269,18 +272,21 @@ In rough order — the user's call:
 1. **Shortcuts share workaround** — handle `location://connect?url=…` deep
    links (`expo-linking` is installed) and document the Shortcut.
 2. **Try it on the iPhone** in Expo Go: live location, paste-a-link, overrides.
-3. **Tap a place → walking directions** in Apple/Google Maps. Tapping a row
-   does nothing yet.
+3. **Tap a place → Google Maps directions.** No routing of our own: the app
+   is for glancing at what's near, and Google does the navigating. Tapping a
+   row does nothing yet.
 4. **Hosting** — see Status.
 5. Smaller: renaming subcategories (delete + recreate today); "also fits"
    chips from Google's other categories for ambiguous places; price is
    manual only.
-6. Later: validation agent, Postgres (note CLAUDE.md says `Bun.sql`, which
-   conflicts with TypeORM's `pg` driver — decide first).
+6. **More ways to sort** — distance stays the default (see FEATURES.md).
+7. Later: validation agent; NestJS/TypeORM undecided (CLAUDE.md says
+   `Bun.sql`, which TypeORM's `pg` driver would replace).
 
 Run:
 
 ```sh
+docker compose up -d      # Postgres (ParadeDB); OrbStack provides docker
 cd api && bun run dev     # localhost:3000
 cd app && bunx expo start # press w for web, or scan for device
 ```

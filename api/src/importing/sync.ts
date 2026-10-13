@@ -25,7 +25,7 @@ export async function refreshStale(
   userKey: string,
   ingest: (url: string) => Promise<IngestResult> = ingestSharedList,
 ): Promise<RefreshSummary> {
-  const due = staleLists(userKey, STALE_AFTER_MS);
+  const due = await staleLists(userKey, STALE_AFTER_MS);
   const summary: RefreshSummary = { checked: due.length, changed: 0, failed: 0 };
 
   await Promise.all(
@@ -36,7 +36,7 @@ export async function refreshStale(
           summary.failed++;
           return;
         }
-        if (saveList(url, userKey, result)) summary.changed++;
+        if (await saveList(url, userKey, result)) summary.changed++;
       } catch {
         summary.failed++;
       }
