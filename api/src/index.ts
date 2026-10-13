@@ -1,24 +1,21 @@
 import index from "../public/index.html";
-import { isCategory, normalizeLabel } from "./categorize";
+import { isCategory, normalizeLabel } from "./categories/categorize";
+import { lookUpPending, rederive } from "./categories/google/job";
+import { categoryOverview } from "./categories/overview";
+import { type OverridePatch, setPlaceOverride } from "./categories/overrides";
+import { rederiveKeywordCategories } from "./categories/rederive";
 import {
-  allPlaces,
-  categoryOverview,
   createSubcategory,
   deleteSubcategory,
-  forgetUser,
-  listAge,
-  rederiveKeywordCategories,
-  type OverridePatch,
-  savedLists,
-  saveList,
   setPlaceSubcategories,
-  setPlaceOverride,
-} from "./db";
-import { haversine, walkingMinutes } from "./geo";
-import { ingestSharedList } from "./ingest/sharedList";
-import { lookUpPending, rederive } from "./enrich/job";
-import { suggestionsFor } from "./suggestions";
-import { refreshStale, STALE_AFTER_MS } from "./sync";
+} from "./categories/subcategories";
+import { suggestionsFor } from "./categories/suggestions";
+import { forgetUser } from "./db";
+import { listAge, savedLists, saveList } from "./importing/lists";
+import { ingestSharedList } from "./importing/sharedList";
+import { refreshStale, STALE_AFTER_MS } from "./importing/sync";
+import { allPlaces } from "./places";
+import { byDistance } from "./distance/distance";
 
 const DEV = process.env.NODE_ENV !== "production";
 
@@ -236,12 +233,7 @@ const server = Bun.serve({
         return json(places.map((p) => ({ ...p, metres: null, walkMinutes: null })));
       }
 
-      const withDistance = places.map((p) => {
-        const metres = Math.round(haversine(lat, lng, p.lat, p.lng));
-        return { ...p, metres, walkMinutes: walkingMinutes(metres) };
-      });
-      withDistance.sort((a, b) => a.metres - b.metres);
-      return json(withDistance);
+      return json(byDistance(places, lat, lng));
     }),
   },
 

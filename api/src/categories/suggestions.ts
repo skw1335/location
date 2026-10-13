@@ -1,4 +1,4 @@
-import type { Count, Subcategory } from "./db";
+import type { Count, Subcategory } from "./overview";
 
 /**
  * Ideas for subcategories, per built-in. Everyone's idea of a "date spot"

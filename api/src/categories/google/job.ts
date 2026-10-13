@@ -1,4 +1,4 @@
-import { placesToLookUp, rederiveLookups, saveLookup } from "../db";
+import { placesToLookUp, rederiveLookups, saveLookup } from "./store";
 import { categoryFromGoogle, cuisineFromGoogle } from "./classify";
 import { type Fetcher, lookUp } from "./googleMaps";
 

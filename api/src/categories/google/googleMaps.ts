@@ -1,5 +1,5 @@
-import { parseGuardedJson, UA } from "../ingest/sharedList";
-import { haversine } from "../geo";
+import { parseGuardedJson, UA } from "../../importing/sharedList";
+import { haversine } from "../../distance/distance";
 
 /**
  * Looks a saved place up on Google Maps to learn what Google calls it —

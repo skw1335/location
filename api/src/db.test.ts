@@ -4,18 +4,15 @@ import type { IngestResult } from "./types";
 // db.ts opens its database at import time, so the path has to be set first.
 process.env.DB_PATH = `/tmp/location-test-${crypto.randomUUID()}.sqlite`;
 
-const {
-  allPlaces,
-  categoryOverview,
-  createSubcategory,
-  deleteSubcategory,
-  forgetUser,
-  rederiveKeywordCategories,
-  saveList,
-  savedLists,
-  setPlaceSubcategories,
-  setPlaceOverride,
-} = await import("./db");
+const { forgetUser } = await import("./db");
+const { saveList, savedLists } = await import("./importing/lists");
+const { allPlaces } = await import("./places");
+const { categoryOverview } = await import("./categories/overview");
+const { setPlaceOverride } = await import("./categories/overrides");
+const { rederiveKeywordCategories } = await import("./categories/rederive");
+const { createSubcategory, deleteSubcategory, setPlaceSubcategories } = await import(
+  "./categories/subcategories"
+);
 
 const result = (name: string): IngestResult => ({
   places: [{ id: name, name, lat: 40.7, lng: -73.9, listName: "l" }],

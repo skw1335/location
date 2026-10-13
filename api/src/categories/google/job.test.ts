@@ -1,11 +1,13 @@
 import { beforeEach, expect, test } from "bun:test";
-import type { IngestResult } from "../types";
+import type { IngestResult } from "../../types";
 import { mapsResponse } from "./fixture";
 
 // db.ts opens its database at import time, so the path has to be set first.
 process.env.DB_PATH = `/tmp/location-test-${crypto.randomUUID()}.sqlite`;
 
-const { allPlaces, saveList, setPlaceOverride } = await import("../db");
+const { allPlaces } = await import("../../places");
+const { saveList } = await import("../../importing/lists");
+const { setPlaceOverride } = await import("../overrides");
 const { lookUpPending, rederive } = await import("./job");
 
 // Lookups are keyed by place id and shared across users, so ids must not

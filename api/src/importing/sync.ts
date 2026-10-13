@@ -1,6 +1,6 @@
-import { saveList, staleLists } from "./db";
-import { ingestSharedList } from "./ingest/sharedList";
-import type { IngestResult } from "./types";
+import { saveList, staleLists } from "./lists";
+import { ingestSharedList } from "./sharedList";
+import type { IngestResult } from "../types";
 
 /** Younger than this, a list is served from cache without touching Google. */
 export const STALE_AFTER_MS = 15 * 60 * 1000;

@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import type { IngestResult, Place } from "./types";
+import type { IngestResult, Place } from "../types";
 
 // db.ts opens its database at import time, so the path has to be set first.
 process.env.DB_PATH = `/tmp/location-test-${crypto.randomUUID()}.sqlite`;
 
-const { allPlaces, saveList } = await import("./db");
+const { allPlaces } = await import("../places");
+const { saveList } = await import("./lists");
 const { refreshStale, STALE_AFTER_MS } = await import("./sync");
 
 const place = (name: string): Place => ({ id: name, name, lat: 40.7, lng: -73.9, listName: "" });
