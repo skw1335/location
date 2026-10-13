@@ -225,8 +225,9 @@ iPhone only; Android was dropped. What it takes to get the app onto a phone:
 The `expo-sharing` share extension is configured (`app.json`, verified via
 prebuild) but only runs in a paid-account dev build. **Free alternative:** an
 iOS Shortcut ("Add to location") in the share sheet that opens
-`location://connect?url=…` — works with every route above, one tap more than
-a real extension. The deep-link handler isn't built yet.
+`location://connect?url=…` (in Expo Go, `exp://<mac>:8081/--/connect?url=…`)
+— works with every route above, one tap more than a real extension. Built;
+setup steps in `app/SHORTCUT.md`.
 
 Bundle id `com.kellmanwanzer.location` is a placeholder; change it before
 registering anything with Apple.
@@ -260,27 +261,24 @@ Grouped by feature; each folder holds its logic and its own queries.
 | Distance sort (straight line, ×1.2 for walk time) | ✅ checked against real NYC walks, 2026-10-13 (see FEATURES.md) |
 | Live location in app (re-sorts every 50 m) | ✅ in code — not yet tried on a phone |
 | Expo app (iOS / web) | ✅ type-checks, web build clean |
-| Connect a list | ✅ paste-a-link; share extension configured (see iOS distribution) |
+| Connect a list | ✅ paste-a-link, Shortcut deep link (`app/SHORTCUT.md`); share extension configured (see iOS distribution) |
+| Tap a place → Google Maps walking directions | ✅ uses Google's place id (all 31 of a real list had one) |
 | Minimal web UI (`api/public`) | ✅ working |
 | Hosting the API | ⏸ later — runs on the Mac. Prefer the Mac + a private tunnel (e.g. Tailscale): Google blocks data-center IPs far more than home ones, and ingest + lookups depend on Google |
-| Tests | `cd api && bun test` (60, needs the database up — each run uses a throwaway one), `cd app && bun test` (4) |
+| Tests | `cd api && bun test` (60, needs the database up — each run uses a throwaway one), `cd app && bun test` (9) |
 
 ## Next up
 
 In rough order — the user's call:
 
-1. **Shortcuts share workaround** — handle `location://connect?url=…` deep
-   links (`expo-linking` is installed) and document the Shortcut.
-2. **Try it on the iPhone** in Expo Go: live location, paste-a-link, overrides.
-3. **Tap a place → Google Maps directions.** No routing of our own: the app
-   is for glancing at what's near, and Google does the navigating. Tapping a
-   row does nothing yet.
-4. **Hosting** — see Status.
-5. Smaller: renaming subcategories (delete + recreate today); "also fits"
+1. **Try it on the iPhone** in Expo Go: live location, the Shortcut, tap to
+   open Maps, overrides.
+2. **Hosting** — see Status.
+3. Smaller: renaming subcategories (delete + recreate today); "also fits"
    chips from Google's other categories for ambiguous places; price is
    manual only.
-6. **More ways to sort** — distance stays the default (see FEATURES.md).
-7. Later: validation agent; NestJS/TypeORM undecided (CLAUDE.md says
+4. **More ways to sort** — distance stays the default (see FEATURES.md).
+5. Later: validation agent; NestJS/TypeORM undecided (CLAUDE.md says
    `Bun.sql`, which TypeORM's `pg` driver would replace).
 
 Run:

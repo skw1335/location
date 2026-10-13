@@ -133,7 +133,10 @@ SELECT p.id, p.user_key, p.list_url, p.name, p.lat, p.lng, p.address, p.note,
        CASE WHEN o.cuisine IS NOT NULL THEN 'override'
             WHEN g.cuisine IS NOT NULL THEN 'google'
             WHEN p.cuisine IS NOT NULL THEN 'derived' END AS cuisine_source,
-       COALESCE(o.price, p.price) AS price
+       COALESCE(o.price, p.price) AS price,
+       -- Google's own place id (ChIJ…), once looked up: lets a tap open the
+       -- exact place in Google Maps. New columns go last (CREATE OR REPLACE VIEW).
+       g.google_id AS google_place_id
 FROM places p
 JOIN lists l ON l.url = p.list_url AND l.user_key = p.user_key
 LEFT JOIN place_overrides o ON o.user_key = p.user_key AND o.place_id = p.id

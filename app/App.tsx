@@ -1,3 +1,4 @@
+import * as Linking from "expo-linking";
 import * as Location from "expo-location";
 import { clearSharedPayloads, useIncomingShare } from "expo-sharing";
 import { StatusBar } from "expo-status-bar";
@@ -33,7 +34,8 @@ import {
   type SavedList,
   setOverride,
 } from "./src/api";
-import { findMapsLink } from "./src/share";
+import { directionsUrl } from "./src/maps";
+import { connectLinkFrom, findMapsLink } from "./src/share";
 
 const EMPTY_OVERVIEW: Overview = {
   builtIn: [],
@@ -93,11 +95,25 @@ function Onboarding({
       </Pressable>
 
       {status ? <Text style={[styles.status, { color: t.dim }]}>{status}</Text> : null}
+
+      {/* What the iOS Shortcut should open (see app/SHORTCUT.md). In Expo Go it
+          carries the Mac's address, so it changes when the network does. */}
+      <Text style={[styles.tag, { color: t.dim, marginTop: 24 }]} selectable>
+        Shortcut link: {Linking.createURL("connect")}?url=
+      </Text>
     </View>
   );
 }
 
-function PlaceRow({ place, onLongPress }: { place: Place; onLongPress: () => void }) {
+function PlaceRow({
+  place,
+  onPress,
+  onLongPress,
+}: {
+  place: Place;
+  onPress: () => void;
+  onLongPress: () => void;
+}) {
   const t = useTheme();
   const distance =
     place.metres === null
@@ -112,7 +128,11 @@ function PlaceRow({ place, onLongPress }: { place: Place; onLongPress: () => voi
     .join(" · ");
 
   return (
-    <Pressable onLongPress={onLongPress} style={[styles.row, { borderTopColor: t.line }]}>
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      style={[styles.row, { borderTopColor: t.line }]}
+    >
       <View style={styles.grow}>
         <Text style={[styles.name, { color: t.text }]}>{place.name}</Text>
         <Text style={[styles.tag, { color: t.dim }]}>{facts}</Text>
@@ -578,17 +598,28 @@ export default function App() {
    */
   const { sharedPayloads } = useIncomingShare();
   const handledShare = useRef<string | null>(null);
-  useEffect(() => {
-    const url = findMapsLink(sharedPayloads);
+  const connectShared = (url: string | null) => {
     if (!url || url === handledShare.current) return;
     handledShare.current = url;
-    clearSharedPayloads();
     // Show the connect screen so the "Fetching…" and result are visible.
     setAdding(true);
     handleConnect(url);
-    // handleConnect is recreated each render; the payloads are what matter.
+  };
+  useEffect(() => {
+    const url = findMapsLink(sharedPayloads);
+    if (url) clearSharedPayloads();
+    connectShared(url);
+    // connectShared is recreated each render; the payloads are what matter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sharedPayloads]);
+
+  // The free stand-in for the share extension: an iOS Shortcut in the share
+  // sheet opens `…/connect?url=<what Maps shared>` (see app/SHORTCUT.md).
+  const deepLink = Linking.useLinkingURL();
+  useEffect(() => {
+    connectShared(connectLinkFrom(deepLink));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLink]);
 
   /**
    * Applies an edit to the open sheet immediately, then persists it. The list
@@ -628,7 +659,14 @@ export default function App() {
           data={places}
           keyExtractor={(p) => `${p.listName}:${p.id}`}
           renderItem={({ item }) => (
-            <PlaceRow place={item} onLongPress={() => setEditing(item)} />
+            <PlaceRow
+              place={item}
+              // Tap to go: Google Maps does the directions. Long-press to edit.
+              onPress={() =>
+                Linking.openURL(directionsUrl(item)).catch((err) => setStatus(String(err)))
+              }
+              onLongPress={() => setEditing(item)}
+            />
           )}
           contentContainerStyle={styles.pad}
           ListHeaderComponent={

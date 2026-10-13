@@ -34,6 +34,7 @@ export interface Place {
   name: string;
   lat: number;
   lng: number;
+  address?: string | null;
   note?: string;
   listName: string;
   category: string;
@@ -46,6 +47,8 @@ export interface Place {
   price: number | null;
   /** The user's own subcategories of `category`: "lunch special", "date spot". */
   subcategories: string[];
+  /** Google's place id (ChIJ…) once the server has looked it up. */
+  googlePlaceId: string | null;
   metres: number | null;
   walkMinutes: number | null;
 }

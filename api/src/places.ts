@@ -27,6 +27,7 @@ export async function allPlaces(userKey: string, filter: PlaceFilter = {}): Prom
     SELECT e.id, e.name, e.lat, e.lng, e.address, e.note,
            e.list_name AS "listName", e.category, e.category_source AS "categorySource",
            e.cuisine, e.cuisine_source AS "cuisineSource", e.price,
+           e.google_place_id AS "googlePlaceId",
            ARRAY(SELECT s.name FROM place_subcategories s
                   WHERE s.user_key = e.user_key AND s.place_id = e.id
                     AND s.parent = e.category

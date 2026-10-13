@@ -24,6 +24,8 @@ export interface Place {
   price?: number | null;
   /** The user's own subcategories of `category`: "lunch special", "date spot". */
   subcategories?: string[];
+  /** Google's place id (ChIJ…) once looked up; null until then. */
+  googlePlaceId?: string | null;
 }
 
 /** Result of ingesting one source, with enough detail to debug a bad parse. */
